@@ -45,6 +45,12 @@ function validateHeaders(request, message) {
     return null;
 }
 
+function responseStatus(response) {
+    if (response?.error?.code === -32601) return 404;
+    if (response?.error?.code === -32602 || response?.error?.code === -32020 || response?.error?.code === -32021 || response?.error?.code === -32022) return 400;
+    return 200;
+}
+
 export default {
     async fetch(request, env) {
         const url = new URL(request.url);
@@ -152,6 +158,7 @@ export default {
             const response = await handler(json);
 
             return new Response(JSON.stringify(response), {
+                status: responseStatus(response),
                 headers: {
                     'Content-Type': 'application/json',
                     'MCP-Protocol-Version': MCP_VERSION,
@@ -161,7 +168,7 @@ export default {
         } catch (err) {
             return new Response(
                 JSON.stringify({ error: 'Invalid request', detail: err.message }),
-                { status: 400, headers }
+                { status: 400, headers: { 'Content-Type': 'application/json', ...headers } }
             );
         }
     },

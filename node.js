@@ -41,6 +41,12 @@ function validateHeaders(req, message) {
   return null;
 }
 
+function responseStatus(response) {
+  if (response?.error?.code === -32601) return 404;
+  if (response?.error?.code === -32602 || response?.error?.code === -32020 || response?.error?.code === -32021 || response?.error?.code === -32022) return 400;
+  return 200;
+}
+
 const server = http.createServer(async (req, res) => {
   const origin = req.headers.origin;
   if (origin && !allowedOrigins.has(origin)) {
@@ -87,7 +93,7 @@ const server = http.createServer(async (req, res) => {
       }
       const response = await handler(message);
 
-      res.writeHead(200, {
+      res.writeHead(responseStatus(response), {
         'Content-Type': 'application/json',
         'MCP-Protocol-Version': MCP_VERSION,
         ...headers,

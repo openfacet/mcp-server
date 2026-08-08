@@ -72,31 +72,34 @@ const meta = {
   'io.modelcontextprotocol/protocolVersion': '2026-07-28',
   'io.modelcontextprotocol/clientCapabilities': {}
 };
-const request = (id, method, params = {}) => ({
-  jsonrpc: '2.0', id, method, params: { ...params, _meta: meta }
-});
+const request = (id, method, params = {}) => ({ jsonrpc: '2.0', id, method, params: { ...params, _meta: meta } });
 
 async function run() {
   const tests = [];
 
-  tests.push(await handler(request(1, 'server/discover')));
-  tests.push(await handler(request(2, 'tools/list')));
-  tests.push(await handler(request(3, 'tools/call', {
+  tests.push(await handler(request(1, 'initialize', {
+    protocolVersion: '2026-07-28',
+    capabilities: {},
+    clientInfo: { name: 'core-test', version: '1.0.0' }
+  })));
+  tests.push(await handler(request(2, 'server/discover')));
+  tests.push(await handler(request(3, 'tools/list')));
+  tests.push(await handler(request(4, 'tools/call', {
     name: 'get_diamond_price',
     arguments: { carat: 0.35, color: 'D', clarity: 'FL', shape: 'round' }
   })));
-  tests.push(await handler(request(4, 'tools/call', {
+  tests.push(await handler(request(5, 'tools/call', {
     name: 'get_diamond_price',
     arguments: { carat: 0.35, color: 'D', clarity: 'FL', shape: 'emerald', shape_ratio: 1.8 }
   })));
-  tests.push(await handler(request(5, 'tools/call', {
+  tests.push(await handler(request(6, 'tools/call', {
     name: 'get_dcx_index'
   })));
-  tests.push(await handler(request(6, 'tools/call', {
+  tests.push(await handler(request(7, 'tools/call', {
     name: 'get_market_depth',
     arguments: { carat: 1.0 }
   })));
-  tests.push(await handler(request(7, 'tools/call', {
+  tests.push(await handler(request(8, 'tools/call', {
     name: 'get_market_depth',
     arguments: {}
   })));
@@ -107,7 +110,21 @@ async function run() {
     if (res.error) console.error(res.error);
   });
 
-  const preferenceQuote = tests[3].result?.structuredContent;
+  const initialization = tests[0].result;
+  if (initialization?.protocolVersion !== '2026-07-28' || initialization?.serverInfo?.name !== 'openfacet-diamond-pricing' || initialization?.resultType !== 'complete') {
+    throw new Error('Initialize response does not match the MCP result schema');
+  }
+
+  const discovery = tests[1].result;
+  if (discovery?.supportedVersions?.[0] !== '2026-07-28' || discovery?.resultType !== 'complete' || discovery?._meta?.['io.modelcontextprotocol/serverInfo']?.name !== 'openfacet-diamond-pricing') {
+    throw new Error('Discovery response does not match ChatGPT MCP connector expectations');
+  }
+
+  if (!tests[2].result?.tools?.every((tool) => tool.outputSchema?.type === 'object' || tool.outputSchema?.oneOf)) {
+    throw new Error('Every published tool must define an output schema');
+  }
+
+  const preferenceQuote = tests[4].result?.structuredContent;
   if (!preferenceQuote?.preference_driven_ratio || preferenceQuote.price_adjustment_ratio !== 1.7 || preferenceQuote.observed_ratio_range?.max !== 1.7) {
     throw new Error('Preference-driven ratio quote did not report the observed endpoint range');
   }
