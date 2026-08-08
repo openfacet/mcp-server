@@ -1,1 +1,1 @@
-export const MCP_VERSION = '2025-06-18';
+export const MCP_VERSION = '2026-07-28';

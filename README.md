@@ -1,6 +1,6 @@
 # OpenFacet MCP Server
 
-[![MCP Protocol](https://img.shields.io/badge/MCP-2025--06--18-blue)](https://spec.modelcontextprotocol.io/)
+[![MCP Protocol](https://img.shields.io/badge/MCP-2026--07--28-blue)](https://modelcontextprotocol.io/specification/2026-07-28)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 [![Node.js Version](https://img.shields.io/badge/node-%3E%3D18-brightgreen)](https://nodejs.org/)
 
@@ -10,7 +10,7 @@ Built with vanilla JavaScript and core modules only - zero external dependencies
 
 ## Features
 
-* Implements MCP 2025‑06‑18 (no batch support, structured content, version headers)
+* Implements MCP 2026-07-28 (stateless per-request metadata, structured content, and HTTP metadata validation)
 * Tools: `get_diamond_price`, `get_dcx_index`, `get_market_depth`
 * Real-time interpolation over carat/color/clarity
 * DCX Index and inventory snapshot with daily refresh
@@ -53,13 +53,13 @@ node stdio.js
 Send a message (paste this JSON and press Enter):
 
 ```plain
-{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_diamond_price","arguments":{"carat":1.23,"color":"G","clarity":"VS2"}}}
+{"jsonrpc":"2.0","id":1,"method":"tools/call","params":{"name":"get_diamond_price","arguments":{"carat":1.23,"color":"G","clarity":"VS2","shape":"emerald","shape_ratio":1.58},"_meta":{"io.modelcontextprotocol/protocolVersion":"2026-07-28","io.modelcontextprotocol/clientCapabilities":{}}}}
 ```
 
 You'll get a response like:
 
 ```plain
-{"jsonrpc":"2.0","id":1,"result":{"content":[{"type":"text","text":"💎 **Diamond Price Quote**\n\n**Specifications:**\n• Carat: 1.23ct\n• Color: G\n• Clarity: VS2\n• Shape: round\n\n**Pricing:**\n• Per Carat: $4,487\n• Total Price: $5,519.01\n\n*Prices from OpenFacet.net API*"}],"_meta":{"timestamp":"2025-07-11T10:21:50.460Z","source":"OpenFacet.net API"}}}
+{"jsonrpc":"2.0","id":1,"result":{"resultType":"complete","content":[{"type":"text","text":"OpenFacet diamond price quote..."}],"structuredContent":{"shape":"emerald","per_carat_usd":4487,"total_usd":5519,"tracking_url":"https://openfacet.net/en/my-diamond/?..."}}}
 ```
 
 ### Local Node.js HTTP server
@@ -77,7 +77,9 @@ Remote server for testing `https://mcp.openfacet.net`. Example price query:
 ```bash
 curl -X POST https://mcp.openfacet.net/ \
   -H "Content-Type: application/json" \
-  -H "MCP-Protocol-Version: 2025-06-18" \
+  -H "MCP-Protocol-Version: 2026-07-28" \
+  -H "Mcp-Method: tools/call" \
+  -H "Mcp-Name: get_diamond_price" \
   -d '{
     "jsonrpc": "2.0",
     "id": 1,
@@ -87,7 +89,13 @@ curl -X POST https://mcp.openfacet.net/ \
       "arguments": {
         "carat": 1.23,
         "color": "G",
-        "clarity": "VS2"
+        "clarity": "VS2",
+        "shape": "emerald",
+        "shape_ratio": 1.58
+      },
+      "_meta": {
+        "io.modelcontextprotocol/protocolVersion": "2026-07-28",
+        "io.modelcontextprotocol/clientCapabilities": {}
       }
     }
   }'
@@ -97,42 +105,47 @@ curl -X POST https://mcp.openfacet.net/ \
 
 ### `get_diamond_price`
 
-Returns interpolated pricing for round/cushion GIA diamonds.
+Returns an OpenFacet price quote using website interpolation, special-size discounts, and shape-ratio models.
 
 Parameters:
 * `carat`: number (0.3–6.0)
 * `color`: string (D–M)
 * `clarity`: string (FL–I3)
-* `shape`: string (optional, default: "round")
+* `shape`: string (optional, default: "round"): `round`, `cushion`, `radiant`, `emerald`, `oval`, `pear`, `marquise`, or `heart`
+* `shape_ratio`: number (optional). Uses the shape model's center ratio when omitted.
+
+Results include a shareable OpenFacet tracking URL. Ratios outside the observed model range are identified as preference-driven.
 
 ### `get_dcx_index`
 
-Returns composite index of diamond price trends. No parameters.
+Returns composite index of diamond price trends, comparing 24-hour, 7-day, and 30-day changes. No parameters.
 
 ### `get_market_depth`
 
-Returns inventory data. Optional parameter:
+Returns observed-offer inventory data. Optional parameter:
 * `carat`: number
 
 ## Testing
 
 ```bash
-node test-core.js
+node core-test.js
+bash bundle.sh
 ```
 
 Covers:
-* Interpolation behavior
-* DCX/market depth parsing
-* Error conditions
-* JSON-RPC correctness
+* Per-request MCP metadata and structured tool results
+* Website special-size interpolation and fancy-shape ratio adjustments
+* DCX trend and market-depth parsing
+* Cloudflare Worker bundle syntax
 
 ## Technical Notes
 
 ### Interpolation
 
 * Log-space interpolation across fixed breakpoints
-* Anchor smoothing near psychological thresholds (0.3, 0.5, 1.0, etc.)
-* Dynamic boost if price trend continues beyond a band
+* Log-space interpolation with website anchor smoothing
+* Website special-size discounts below 0.5, 0.7, 1.0, 1.5, 2.0, 3.0, and 5.0ct anchors
+* Ratio-band multipliers for supported fancy shapes
 
 ### Specifications
 

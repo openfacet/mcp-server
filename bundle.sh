@@ -1,8 +1,8 @@
 #!/bin/sh
 
-# Strip 'export' from mcp-version.js and core.js
-sed 's/^export const/const/' mcp-version.js > _version.tmp.js
-sed 's/^export function/function/' core.js | grep -v '^import' > _core.tmp.js
+# Strip ES module syntax from shared files for the Worker bundle.
+sed 's/^export //' mcp-version.js > _version.tmp.js
+sed 's/^export //' core.js | grep -v '^import' > _core.tmp.js
 
 # Remove import lines from worker.js
 grep -v '^import' worker.js > _worker.tmp.js
