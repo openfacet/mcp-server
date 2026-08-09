@@ -124,6 +124,10 @@ async function run() {
     throw new Error('Every published tool must define an output schema');
   }
 
+  if (!tests[2].result?.tools?.every((tool) => tool.annotations?.readOnlyHint === true)) {
+    throw new Error('Every published tool must be marked read-only');
+  }
+
   const preferenceQuote = tests[4].result?.structuredContent;
   if (!preferenceQuote?.preference_driven_ratio || preferenceQuote.price_adjustment_ratio !== 1.7 || preferenceQuote.observed_ratio_range?.max !== 1.7) {
     throw new Error('Preference-driven ratio quote did not report the observed endpoint range');
