@@ -128,6 +128,10 @@ async function run() {
     throw new Error('Every published tool must be marked read-only');
   }
 
+  if (!tests[2].result?.tools?.every((tool) => tool.annotations?.openWorldHint === false && tool.annotations?.destructiveHint === false)) {
+    throw new Error('Every published tool must be marked non-open-world and non-destructive');
+  }
+
   const preferenceQuote = tests[4].result?.structuredContent;
   if (!preferenceQuote?.preference_driven_ratio || preferenceQuote.price_adjustment_ratio !== 1.7 || preferenceQuote.observed_ratio_range?.max !== 1.7) {
     throw new Error('Preference-driven ratio quote did not report the observed endpoint range');
