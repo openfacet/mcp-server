@@ -38,8 +38,15 @@ function validateHeaders(request, message) {
     const version = request.headers.get('MCP-Protocol-Version');
     const method = request.headers.get('Mcp-Method');
     const name = request.headers.get('Mcp-Name');
-    const bodyVersion = message.params?._meta?.['io.modelcontextprotocol/protocolVersion'];
-    if (!version || !method || version !== bodyVersion || method !== message.method || (message.method === 'tools/call' && name !== message.params?.name)) {
+    const bodyVersion = message.params?._meta?.['io.modelcontextprotocol/protocolVersion'] ?? message.params?.protocolVersion;
+
+    if (version && bodyVersion && version !== bodyVersion) {
+        return 'MCP request headers do not match the request body';
+    }
+    if (method && method !== message.method) {
+        return 'MCP request headers do not match the request body';
+    }
+    if (message.method === 'tools/call' && name && name !== message.params?.name) {
         return 'MCP request headers do not match the request body';
     }
     return null;
@@ -130,20 +137,39 @@ export default {
             });
         }
 
-        // Redirect root GET requests with noindex header
-        if (request.method === 'GET' && url.pathname === '/') {
-            return new Response(null, {
-                status: 302,
+        // Streamable HTTP transport:
+        // Respond with 405 Method Not Allowed to GET requests on the MCP endpoint (per MCP Streamable HTTP spec),
+        // unless a browser is navigating directly with Accept: text/html, which redirects to documentation.
+        if (request.method === 'GET' && url.pathname === MCP_PATH) {
+            const accept = request.headers.get('Accept') || '';
+            if (accept.includes('text/html')) {
+                return new Response(null, {
+                    status: 302,
+                    headers: {
+                        'Location': DOCS_URL,
+                        'X-Robots-Tag': 'noindex',
+                        ...headers,
+                    },
+                });
+            }
+
+            return new Response('Method Not Allowed', {
+                status: 405,
                 headers: {
-                    'Location': DOCS_URL,
-                    'X-Robots-Tag': 'noindex',
-                    ...headers
-                }
+                    'Allow': 'POST, OPTIONS',
+                    ...headers,
+                },
             });
         }
 
         if (request.method !== 'POST' || url.pathname !== MCP_PATH) {
-            return new Response('Method Not Allowed', { status: 405, headers });
+            return new Response('Method Not Allowed', {
+                status: 405,
+                headers: {
+                    'Allow': 'POST, OPTIONS',
+                    ...headers,
+                },
+            });
         }
 
         try {

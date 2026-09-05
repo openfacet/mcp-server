@@ -34,8 +34,15 @@ function validateHeaders(req, message) {
   const version = req.headers['mcp-protocol-version'];
   const method = req.headers['mcp-method'];
   const name = req.headers['mcp-name'];
-  const bodyVersion = message.params?._meta?.['io.modelcontextprotocol/protocolVersion'];
-  if (!version || !method || version !== bodyVersion || method !== message.method || (message.method === 'tools/call' && name !== message.params?.name)) {
+  const bodyVersion = message.params?._meta?.['io.modelcontextprotocol/protocolVersion'] ?? message.params?.protocolVersion;
+
+  if (version && bodyVersion && version !== bodyVersion) {
+    return 'MCP request headers do not match the request body';
+  }
+  if (method && method !== message.method) {
+    return 'MCP request headers do not match the request body';
+  }
+  if (message.method === 'tools/call' && name && name !== message.params?.name) {
     return 'MCP request headers do not match the request body';
   }
   return null;
@@ -72,7 +79,7 @@ const server = http.createServer(async (req, res) => {
   }
 
   if (req.url !== MCP_PATH || req.method !== 'POST') {
-    res.writeHead(405, headers);
+    res.writeHead(405, { 'Allow': 'POST, OPTIONS', ...headers });
     res.end('Method Not Allowed');
     return;
   }

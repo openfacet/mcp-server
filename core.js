@@ -37,11 +37,13 @@ export function createMCPHandler({ fetchFn, cache, logger }) {
 
   function validateMetadata(message) {
     const meta = message.params?._meta;
-    if (!meta || typeof meta !== 'object' || Array.isArray(meta)) return { code: -32602, message: 'Missing request metadata' };
+    if (!meta) return null;
+    if (typeof meta !== 'object' || Array.isArray(meta)) return { code: -32602, message: 'Invalid request metadata' };
     const version = meta['io.modelcontextprotocol/protocolVersion'];
     const capabilities = meta['io.modelcontextprotocol/clientCapabilities'];
-    if (typeof version !== 'string' || !capabilities || typeof capabilities !== 'object' || Array.isArray(capabilities)) return { code: -32602, message: 'Request metadata must include protocolVersion and clientCapabilities' };
-    if (version !== MCP_VERSION) return { code: -32022, message: 'Unsupported protocol version', data: { requested: version, supported: [MCP_VERSION] } };
+    if (version !== undefined && typeof version !== 'string') return { code: -32602, message: 'Protocol version must be a string' };
+    if (capabilities !== undefined && (typeof capabilities !== 'object' || Array.isArray(capabilities))) return { code: -32602, message: 'Client capabilities must be an object' };
+    if (version && version !== MCP_VERSION) return { code: -32022, message: 'Unsupported protocol version', data: { requested: version, supported: [MCP_VERSION] } };
     return null;
   }
 

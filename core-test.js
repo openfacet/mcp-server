@@ -103,6 +103,26 @@ async function run() {
     name: 'get_market_depth',
     arguments: {}
   })));
+  // Test standard MCP client without _meta in params
+  tests.push(await handler({
+    jsonrpc: '2.0',
+    id: 9,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2026-07-28',
+      capabilities: {},
+      clientInfo: { name: 'standard-client', version: '1.0' }
+    }
+  }));
+  tests.push(await handler({
+    jsonrpc: '2.0',
+    id: 10,
+    method: 'tools/call',
+    params: {
+      name: 'get_dcx_index',
+      arguments: {}
+    }
+  }));
 
   tests.forEach((res, i) => {
     const status = res.error ? 'FAIL' : 'PASS';
