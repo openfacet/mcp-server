@@ -108,13 +108,13 @@ curl -X POST https://mcp.openfacet.net/ \
 Returns an OpenFacet price quote using website interpolation, special-size discounts, and shape-ratio models.
 
 Parameters:
-* `carat`: number (0.3–6.0)
-* `color`: string (D–M)
-* `clarity`: string (FL–I3)
+* `carat`: number (0.01–6.0 for `round`; 0.3–6.0 for fancy shapes)
+* `color`: string (D–M for fancy shapes; D–J for melee rounds)
+* `clarity`: string (FL–I3 for fancy shapes; VVS1–SI2 for melee rounds)
 * `shape`: string (optional, default: "round"): `round`, `cushion`, `radiant`, `emerald`, `oval`, `pear`, `marquise`, or `heart`
 * `shape_ratio`: number (optional). Uses the shape model's center ratio when omitted.
 
-Results include a shareable OpenFacet tracking URL. Ratios outside the observed model range are identified as preference-driven.
+Results include a shareable OpenFacet tracking URL. Ratios outside the observed model range are identified as preference-driven. Round diamonds below 0.3 ct are priced from the melee matrix (`matrix_melee.json`), which covers 0.01–0.29 ct across colors D–J and clarities VVS1–SI2.
 
 ### `get_dcx_index`
 

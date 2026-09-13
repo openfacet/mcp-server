@@ -10,6 +10,9 @@ const ANCHORS = [0.3, 0.4, 0.5, 0.7, 0.9, 1, 1.5, 2, 3];
 const SPECIAL_TARGETS = [0.5, 0.7, 1, 1.5, 2, 3, 5];
 const DISCOUNTS = [0.12, 0.06, 0.03];
 const SHAPES = ['round', 'cushion', 'radiant', 'emerald', 'oval', 'pear', 'marquise', 'heart'];
+const MELEE_MIN_CARAT = 0.01;
+const MELEE_COLORS = ['D', 'E', 'F', 'G', 'H', 'I', 'J'];
+const MELEE_CLARITIES = ['VVS1', 'VVS2', 'VS1', 'VS2', 'SI1', 'SI2'];
 const SERVER_INFO = { name: 'openfacet-diamond-pricing', version: '2.0.0' };
 
 export function createMCPHandler({ fetchFn, cache, logger }) {
@@ -67,26 +70,30 @@ export function createMCPHandler({ fetchFn, cache, logger }) {
   async function getCached(key, load) { const entry = cache.get(key); if (entry && Date.now() - entry.ts < CACHE_DURATION) return entry.data; const data = await load(); cache.set(key, { data, ts: Date.now() }); return data; }
 
   async function getDiamondPrice({ carat, color, clarity, shape = 'round', shape_ratio: suppliedRatio }) {
-    if (!Number.isFinite(carat) || carat < 0.3 || carat > 6) throw new Error('Carat must be a number between 0.3 and 6.0');
     const normalizedShape = `${shape}`.toLowerCase();
     if (!SHAPES.includes(normalizedShape)) throw new Error(`Invalid shape: ${shape}. Choose one of: ${SHAPES.join(', ')}`);
-    const [round, cushion, ratioModels] = await Promise.all([
+    const isMelee = normalizedShape === 'round' && carat < BREAKPOINTS[0];
+    const minCarat = normalizedShape === 'round' ? MELEE_MIN_CARAT : BREAKPOINTS[0];
+    if (!Number.isFinite(carat) || carat < minCarat || carat > 6) throw new Error(`Carat must be a number between ${minCarat} and 6.0`);
+    const [round, cushion, ratioModels, melee] = await Promise.all([
       getCached('matrix_round', () => fetchFn(`${API_BASE_URL}/matrix.json`)),
       getCached('matrix_cushion', () => fetchFn(`${API_BASE_URL}/matrix_cushion.json`)),
       getCached('ratio_models', () => fetchFn(`${API_BASE_URL}/ratio_models.json`)),
+      getCached('matrix_melee', async () => expandMeleeMatrix(await fetchFn(`${API_BASE_URL}/matrix_melee.json`))),
     ]);
     const model = ratioModels?.shapes?.[normalizedShape] || null;
-    const matrix = model?.dataSource === 'cushion' || normalizedShape === 'cushion' ? cushion : round;
+    const matrix = isMelee ? melee : (model?.dataSource === 'cushion' || normalizedShape === 'cushion' ? cushion : round);
     const normalizedColor = `${color}`.toUpperCase();
     const normalizedClarity = `${clarity}`.toUpperCase();
     const colorIndex = matrix.r.indexOf(normalizedColor);
     const clarityIndex = matrix.c.indexOf(normalizedClarity);
-    if (colorIndex < 0) throw new Error(`Invalid color: ${color}`);
-    if (clarityIndex < 0) throw new Error(`Invalid clarity: ${clarity}`);
+    if (colorIndex < 0) throw new Error(`Invalid color: ${color}${isMelee ? ` (melee supports ${matrix.r.join(', ')})` : ''}`);
+    if (clarityIndex < 0) throw new Error(`Invalid clarity: ${clarity}${isMelee ? ` (melee supports ${matrix.c.join(', ')})` : ''}`);
     const ratio = suppliedRatio ?? model?.slider?.center ?? 1;
     if (!Number.isFinite(ratio) || (model?.slider && (ratio < model.slider.min || ratio > model.slider.max))) throw new Error(`Shape ratio must be a number${model?.slider ? ` between ${model.slider.min} and ${model.slider.max}` : ''}`);
     const ratioRange = ratioRanges(model, carat, ratio);
-    const basePerCarat = interpolatePrice(carat, matrix.l, matrix.c.length, colorIndex, clarityIndex);
+    const breakpoints = isMelee ? meleeBreakpoints(melee) : BREAKPOINTS;
+    const basePerCarat = interpolatePrice(carat, matrix.l, matrix.c.length, colorIndex, clarityIndex, breakpoints);
     const multiplier = ratioMultiplier(model, carat, ratio);
     const perCarat = Math.round(basePerCarat * multiplier);
     const total = Math.round(perCarat * carat);
@@ -98,24 +105,25 @@ export function createMCPHandler({ fetchFn, cache, logger }) {
     return { content: [{ type: 'text', text: `OpenFacet diamond price quote\n\n- ${carat.toFixed(2)} ct ${normalizedShape}\n- Color: ${normalizedColor}\n- Clarity: ${normalizedClarity}${ratioText}\n- Per carat: $${perCarat.toLocaleString()}\n- Total: $${total.toLocaleString()}${preferenceText}\n\nTrack this diamond: ${trackingUrl}` }], structuredContent, _meta: { timestamp: new Date().toISOString(), source: 'openfacet.net' } };
   }
 
-  function interpolatePrice(carat, logPrices, clarityCount, colorIndex, clarityIndex) {
-    let band = BREAKPOINTS.findIndex((point, index) => carat >= point && carat < BREAKPOINTS[index + 1]);
-    if (band === -1) band = BREAKPOINTS.length - 2;
-    const from = BREAKPOINTS[band]; const to = BREAKPOINTS[band + 1];
-    const first = logPrices[from.toFixed(1)]; const second = logPrices[to.toFixed(1)];
+  function interpolatePrice(carat, logPrices, clarityCount, colorIndex, clarityIndex, breakpoints = BREAKPOINTS) {
+    const clamped = Math.min(Math.max(carat, breakpoints[0]), breakpoints[breakpoints.length - 1]);
+    let band = breakpoints.findIndex((point, index) => clamped >= point && clamped < breakpoints[index + 1]);
+    if (band === -1) band = breakpoints.length - 2;
+    const from = breakpoints[band]; const to = breakpoints[band + 1];
+    const first = logPrices[nearestBandKey(logPrices, from)]; const second = logPrices[nearestBandKey(logPrices, to)];
     const valueIndex = colorIndex * clarityCount + clarityIndex;
     if (!first || !second || !Number.isFinite(first[valueIndex]) || !Number.isFinite(second[valueIndex])) throw new Error(`Missing price data around ${carat}ct`);
     const current = first[valueIndex]; const next = second[valueIndex]; const nextPrice = Math.exp(next);
     let effectiveNext = next;
     const specialBand = SPECIAL_TARGETS.some((target) => Math.abs(target - to) < 0.0005);
-    if (specialBand && Math.abs(carat - to) >= 0.0005) {
+    if (specialBand && Math.abs(clamped - to) >= 0.0005) {
       const discount = DISCOUNTS.find((candidate) => nextPrice * (1 - candidate) >= Math.exp(current));
       if (discount) effectiveNext += Math.log(1 - discount);
     }
-    const base = Math.exp((1 - ((carat - from) / (to - from))) * current + ((carat - from) / (to - from)) * effectiveNext);
+    const base = Math.exp((1 - ((clamped - from) / (to - from))) * current + ((clamped - from) / (to - from)) * effectiveNext);
     if (specialBand) return base;
-    const threshold = ANCHORS.find((point) => point > carat && point - carat < 0.03);
-    const boost = threshold && nextPrice > base ? Math.min(0.1 * Math.exp(-300 * (threshold - carat)), (nextPrice / base - 1) * 0.8) : 0;
+    const threshold = ANCHORS.find((point) => point > clamped && point - clamped < 0.03);
+    const boost = threshold && nextPrice > base ? Math.min(0.1 * Math.exp(-300 * (threshold - clamped)), (nextPrice / base - 1) * 0.8) : 0;
     return base * (1 + boost);
   }
 
@@ -141,13 +149,17 @@ export function createMCPHandler({ fetchFn, cache, logger }) {
   }
 
   const toolAnnotations = { readOnlyHint: true, openWorldHint: false, destructiveHint: false };
-  const toolGetDiamondPrice = { name: 'get_diamond_price', title: 'Get Diamond Price', description: 'Quote an OpenFacet diamond price using the live matrix, special-size curve, and shape-ratio adjustment. Results state the supported shape ratio range, the carat-specific observed pricing range, and when an endpoint price is used because a ratio is preference-driven.', annotations: toolAnnotations, inputSchema: { type: 'object', additionalProperties: false, properties: { carat: { type: 'number', minimum: 0.3, maximum: 6 }, color: { type: 'string', enum: ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'] }, clarity: { type: 'string', enum: ['FL', 'IF', 'VVS1', 'VVS2', 'VS1', 'VS2', 'SI1', 'SI2'] }, shape: { type: 'string', enum: SHAPES, default: 'round' }, shape_ratio: { type: 'number', description: 'Length-to-width ratio for fancy shapes. Defaults to the shape model center. The result returns live supported and observed pricing ranges.' } }, required: ['carat', 'color', 'clarity'] }, outputSchema: { type: 'object', required: ['shape', 'carat', 'color', 'clarity', 'shape_ratio', 'per_carat_usd', 'total_usd', 'tracking_url'], properties: { shape: { type: 'string' }, carat: { type: 'number' }, color: { type: 'string' }, clarity: { type: 'string' }, shape_ratio: { type: 'number' }, supported_ratio_range: { type: 'object', properties: { min: { type: 'number' }, max: { type: 'number' } } }, observed_ratio_range: { type: 'object', properties: { min: { type: 'number' }, max: { type: 'number' } } }, price_adjustment_ratio: { type: 'number' }, per_carat_usd: { type: 'number' }, total_usd: { type: 'number' }, ratio_multiplier: { type: 'number' }, preference_driven_ratio: { type: 'boolean' }, tracking_url: { type: 'string' } } } };
+  const toolGetDiamondPrice = { name: 'get_diamond_price', title: 'Get Diamond Price', description: 'Quote an OpenFacet diamond price using the live matrix, special-size curve, and shape-ratio adjustment. Round diamonds are priced from 0.01 ct (melee) through 6.0 ct; fancy shapes are priced from 0.3 ct. Results state the supported shape ratio range, the carat-specific observed pricing range, and when an endpoint price is used because a ratio is preference-driven.', annotations: toolAnnotations, inputSchema: { type: 'object', additionalProperties: false, properties: { carat: { type: 'number', minimum: 0.01, maximum: 6 }, color: { type: 'string', enum: ['D', 'E', 'F', 'G', 'H', 'I', 'J', 'K', 'L', 'M'] }, clarity: { type: 'string', enum: ['FL', 'IF', 'VVS1', 'VVS2', 'VS1', 'VS2', 'SI1', 'SI2'] }, shape: { type: 'string', enum: SHAPES, default: 'round' }, shape_ratio: { type: 'number', description: 'Length-to-width ratio for fancy shapes. Defaults to the shape model center. The result returns live supported and observed pricing ranges.' } }, required: ['carat', 'color', 'clarity'] }, outputSchema: { type: 'object', required: ['shape', 'carat', 'color', 'clarity', 'shape_ratio', 'per_carat_usd', 'total_usd', 'tracking_url'], properties: { shape: { type: 'string' }, carat: { type: 'number' }, color: { type: 'string' }, clarity: { type: 'string' }, shape_ratio: { type: 'number' }, supported_ratio_range: { type: 'object', properties: { min: { type: 'number' }, max: { type: 'number' } } }, observed_ratio_range: { type: 'object', properties: { min: { type: 'number' }, max: { type: 'number' } } }, price_adjustment_ratio: { type: 'number' }, per_carat_usd: { type: 'number' }, total_usd: { type: 'number' }, ratio_multiplier: { type: 'number' }, preference_driven_ratio: { type: 'boolean' }, tracking_url: { type: 'string' } } } };
   const toolGetDCXIndex = { name: 'get_dcx_index', title: 'Get DCX Index', description: 'Return the OpenFacet Diamond Composite Index with 24-hour, 7-day, and 30-day trends.', annotations: toolAnnotations, inputSchema: { type: 'object', properties: {}, additionalProperties: false }, outputSchema: { type: 'object', required: ['dcx_usd_per_carat', 'trends_percent', 'timestamp', 'specs'], properties: { dcx_usd_per_carat: { type: 'number' }, trends_percent: { type: 'object', properties: { '24h': { type: 'number' }, '7d': { type: 'number' }, '30d': { type: 'number' } } }, timestamp: { type: ['number', 'string'] }, specs: { type: 'array', items: { type: 'object', properties: { carat: { type: 'number' }, color: { type: 'string' }, clarity: { type: 'string' }, per_carat: { type: 'number' } } } } } } };
   const toolGetMarketDepth = { name: 'get_market_depth', title: 'Get Market Depth', description: 'Return comparable observed-offer depth, optionally at a carat weight.', annotations: toolAnnotations, inputSchema: { type: 'object', properties: { carat: { type: 'number', minimum: 0.3, maximum: 6 } }, additionalProperties: false }, outputSchema: { oneOf: [{ type: 'object', required: ['carat', 'comparable_offer_count', 'clarity', 'color', 'availability'], properties: { carat: { type: 'number' }, comparable_offer_count: { type: 'number' }, clarity: { type: 'object', additionalProperties: { type: 'number' } }, color: { type: 'object', additionalProperties: { type: 'number' } }, availability: { type: 'string' } } }, { type: 'object', required: ['available_carats', 'top_combinations'], properties: { available_carats: { type: 'array', items: { type: 'number' } }, top_combinations: { type: 'array', items: { type: 'object', required: ['specification', 'observed_offers'], properties: { specification: { type: 'string' }, observed_offers: { type: 'number' } } } } } }] } };
   return handle;
 }
 
 function findBand(model, carat) { return model?.bands?.find((band) => carat >= band.minCarat && (band.maxCarat == null || carat <= band.maxCarat)); }
+function nearestBandKey(logMap, band) { const keys = Object.keys(logMap || {}); return keys.find((key) => Math.abs(Number(key) - band) < 1e-9) || band.toFixed(1); }
+function meleeBreakpoints(matrix) { return Object.keys(matrix?.l || {}).map(Number).filter(Number.isFinite).sort((first, second) => first - second); }
+function groupedGradeIndex(groups, grade, isColor) { return groups.findIndex((group) => group.includes(grade) || (!isColor && ((group === 'VS+' && ['FL', 'IF', 'VVS1', 'VVS2', 'VS1', 'VS2'].includes(grade)) || (group === 'SI' && ['SI1', 'SI2'].includes(grade))))); }
+function expandMeleeMatrix(matrix) { const colors = MELEE_COLORS.filter((grade) => groupedGradeIndex(matrix.r, grade, true) >= 0); const clarities = MELEE_CLARITIES.filter((grade) => groupedGradeIndex(matrix.c, grade, false) >= 0); return { ...matrix, r: colors, c: clarities, s: [colors.length, clarities.length], l: Object.fromEntries(Object.entries(matrix.l).map(([band, values]) => [band, colors.flatMap((color) => clarities.map((clarity) => values[groupedGradeIndex(matrix.r, color, true) * matrix.c.length + groupedGradeIndex(matrix.c, clarity, false)]))])) }; }
 function ratioRanges(model, carat, ratio) { const points = findBand(model, carat)?.points; const supported = model?.slider ? { min: model.slider.min, max: model.slider.max } : null; if (!points?.length) return { supported, observed: null, applied: ratio }; const sorted = [...points].sort((first, second) => first.ratio - second.ratio); return { supported, observed: { min: sorted[0].ratio, max: sorted.at(-1).ratio }, applied: Math.min(sorted.at(-1).ratio, Math.max(sorted[0].ratio, ratio)) }; }
 function ratioMultiplier(model, carat, ratio) { const band = findBand(model, carat); if (!band?.points?.length) return 1; const points = [...band.points].sort((first, second) => first.ratio - second.ratio); const clamped = Math.min(points.at(-1).ratio, Math.max(points[0].ratio, ratio)); let value = points.at(-1).value; for (let index = 0; index < points.length - 1; index += 1) { const from = points[index]; const to = points[index + 1]; if (clamped >= from.ratio && clamped <= to.ratio) { value = from.value + ((to.value - from.value) * ((clamped - from.ratio) / (to.ratio - from.ratio))); break; } } return model.valueMode === 'delta_pct' ? 1 + (value / 100) : value / 100; }
 function isPreferenceDrivenRatio(model, carat, ratio) { const points = findBand(model, carat)?.points; if (!points?.length) return false; const sorted = [...points].sort((first, second) => first.ratio - second.ratio); return ratio < sorted[0].ratio || ratio > sorted.at(-1).ratio; }

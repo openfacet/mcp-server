@@ -33,6 +33,22 @@ const mockFetch = async (url) => {
         }
       }
     };
+  } else if (url.endsWith('/matrix_melee.json')) {
+    // Grouped melee matrix: r=[DEF, GH, IJK], c=[VS+, SI]
+    return {
+      r: ['DEF', 'GH', 'IJK'],
+      c: ['VS+', 'SI'],
+      s: [3, 2],
+      l: {
+        '0.01': [6.769641976852503, 6.338594078203183, 6.413458957167357, 6.22455842927536, 6.22455842927536, 5.971261839790462],
+        '0.05': [6.951772164398911, 6.413458957167357, 6.546785410760524, 6.338594078203183, 6.338594078203183, 6.115892125483034],
+        '0.10': [7.106606137727303, 6.606650186198215, 6.818924065275521, 6.546785410760524, 6.546785410760524, 6.338594078203183],
+        '0.15': [7.2399325913204695, 6.90975328164481, 6.951772164398911, 6.818924065275521, 6.769641976852503, 6.546785410760524],
+        '0.20': [7.357556200910353, 7.0317412587631285, 7.106606137727303, 6.951772164398911, 6.93537044601511, 6.664409020350408],
+        '0.25': [7.445417556701687, 7.161622002939187, 7.226936018493289, 7.069874128458572, 7.0317412587631285, 6.71901315438526],
+        '0.29': [7.445417556701687, 7.161622002939187, 7.226936018493289, 7.069874128458572, 7.0317412587631285, 6.71901315438526]
+      }
+    };
   } else if (url.endsWith('/index.json')) {
     return {
       dcx: 5123.45,
@@ -92,21 +108,40 @@ async function run() {
     name: 'get_diamond_price',
     arguments: { carat: 0.35, color: 'D', clarity: 'FL', shape: 'emerald', shape_ratio: 1.8 }
   })));
+  // Melee round diamond (below 0.3ct)
   tests.push(await handler(request(6, 'tools/call', {
-    name: 'get_dcx_index'
+    name: 'get_diamond_price',
+    arguments: { carat: 0.05, color: 'F', clarity: 'VS1', shape: 'round' }
   })));
   tests.push(await handler(request(7, 'tools/call', {
+    name: 'get_diamond_price',
+    arguments: { carat: 0.01, color: 'D', clarity: 'VVS1', shape: 'round' }
+  })));
+  // Melee with unsupported grade should error gracefully
+  tests.push(await handler(request(8, 'tools/call', {
+    name: 'get_diamond_price',
+    arguments: { carat: 0.05, color: 'M', clarity: 'SI2', shape: 'round' }
+  })));
+  // Fancy shape below 0.3ct should still error
+  tests.push(await handler(request(9, 'tools/call', {
+    name: 'get_diamond_price',
+    arguments: { carat: 0.05, color: 'D', clarity: 'FL', shape: 'emerald' }
+  })));
+  tests.push(await handler(request(10, 'tools/call', {
+    name: 'get_dcx_index'
+  })));
+  tests.push(await handler(request(11, 'tools/call', {
     name: 'get_market_depth',
     arguments: { carat: 1.0 }
   })));
-  tests.push(await handler(request(8, 'tools/call', {
+  tests.push(await handler(request(12, 'tools/call', {
     name: 'get_market_depth',
     arguments: {}
   })));
   // Test standard MCP client without _meta in params
   tests.push(await handler({
     jsonrpc: '2.0',
-    id: 9,
+    id: 13,
     method: 'initialize',
     params: {
       protocolVersion: '2026-07-28',
@@ -116,7 +151,7 @@ async function run() {
   }));
   tests.push(await handler({
     jsonrpc: '2.0',
-    id: 10,
+    id: 14,
     method: 'tools/call',
     params: {
       name: 'get_dcx_index',
@@ -155,6 +190,30 @@ async function run() {
   const preferenceQuote = tests[4].result?.structuredContent;
   if (!preferenceQuote?.preference_driven_ratio || preferenceQuote.price_adjustment_ratio !== 1.7 || preferenceQuote.observed_ratio_range?.max !== 1.7) {
     throw new Error('Preference-driven ratio quote did not report the observed endpoint range');
+  }
+
+  // Melee round quote (0.05ct F/VS1) must succeed with a positive per-carat price
+  const meleeQuote = tests[5].result?.structuredContent;
+  if (!meleeQuote || meleeQuote.shape !== 'round' || meleeQuote.carat !== 0.05 || !Number.isFinite(meleeQuote.per_carat_usd) || meleeQuote.per_carat_usd <= 0) {
+    throw new Error('Melee round quote (0.05ct F/VS1) did not return a valid price');
+  }
+
+  // Melee at the floor (0.01ct D/VVS1) must succeed
+  const meleeFloorQuote = tests[6].result?.structuredContent;
+  if (!meleeFloorQuote || meleeFloorQuote.carat !== 0.01 || !Number.isFinite(meleeFloorQuote.per_carat_usd) || meleeFloorQuote.per_carat_usd <= 0) {
+    throw new Error('Melee floor quote (0.01ct D/VVS1) did not return a valid price');
+  }
+
+  // Melee with unsupported color (M) must surface an error result, not throw
+  const meleeUnsupported = tests[7].result;
+  if (!meleeUnsupported?.isError) {
+    throw new Error('Melee quote with unsupported color M should return an error result');
+  }
+
+  // Fancy shape below 0.3ct must surface an error result
+  const fancyBelowMin = tests[8].result;
+  if (!fancyBelowMin?.isError) {
+    throw new Error('Fancy shape below 0.3ct should return an error result');
   }
 }
 
